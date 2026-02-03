@@ -1,97 +1,88 @@
 networks:
   data-pipeline:
     driver: bridge
-    ipam:
-      config:
-        - subnet: 172.25.0.0/16
 
 services:
   kafka:
     image: apache/kafka:3.7.0
     container_name: kafka
     hostname: kafka
-    networks:
-      data-pipeline:
-        ipv4_address: 172.25.0.10
     ports:
       - "9092:9092"
-      - "9094:9094"
     environment:
       KAFKA_NODE_ID: 1
       KAFKA_PROCESS_ROLES: broker,controller
-      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093,PLAINTEXT_HOST://0.0.0.0:9094
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:9094
-      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
       KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
       KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
       KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
       KAFKA_KRAFT_CLUSTER_ID: "MkU3ODA4ODAzZDJ0MTFid2"
-      KAFKA_LOG_DIRS: /var/lib/kafka/data
-    volumes:
-      - kafka_data:/var/lib/kafka/data
+      KAFKA_HEAP_OPTS: "-Xms64M -Xmx128M"
+      KAFKA_LOG_RETENTION_HOURS: 1
+      KAFKA_LOG_RETENTION_BYTES: 26214400
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
     deploy:
       resources:
         limits:
-          memory: 512M
+          memory: 256M
+          cpus: '0.5'
     restart: unless-stopped
-    healthcheck:
-      test: ["CMD-SHELL", "nc -z localhost 9092 || exit 1"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
 
   kafka-ui:
     image: provectuslabs/kafka-ui:v0.7.2
     container_name: kafka_ui
-    networks:
-      data-pipeline:
-        ipv4_address: 172.25.0.11
     ports:
       - "8081:8080"
     environment:
       KAFKA_CLUSTERS_0_NAME: local
       KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9092
+      LOGGING_LEVEL_ROOT: ERROR
     depends_on:
-      kafka:
-        condition: service_healthy
+      - kafka
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+          cpus: '0.25'
+    restart: unless-stopped
 
   spark-master:
     image: apache/spark:3.5.3-scala2.12-java17-python3-ubuntu
     container_name: spark_master
     hostname: spark-master
-    user: root
-    networks:
-      data-pipeline:
-        ipv4_address: 172.25.0.30
     environment:
-      - SPARK_MODE=master
-      - SPARK_MASTER_PORT=7077
-      - SPARK_MASTER_WEBUI_PORT=8080
       - SPARK_NO_DAEMONIZE=true
-    command: >
-      bash -c "/opt/spark/sbin/start-master.sh && tail -f /opt/spark/logs/*"
+    command: /opt/spark/bin/spark-class org.apache.spark.deploy.master.Master --host 0.0.0.0 --port 7077 --webui-port 8080
     ports:
       - "8080:8080"
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080"]
-      interval: 10s
-      timeout: 5s
+      - "7077:7077"
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '1.0'
+    restart: unless-stopped
 
   spark-worker:
     image: apache/spark:3.5.3-scala2.12-java17-python3-ubuntu
     container_name: spark_worker
-    user: root
-    networks:
-      data-pipeline:
-        ipv4_address: 172.25.0.31
+    hostname: spark-worker
     environment:
-      - SPARK_MODE=worker
-      - SPARK_MASTER_URL=spark://spark-master:7077
-      - SPARK_WORKER_CORES=2
-      - SPARK_WORKER_MEMORY=1G
+      - SPARK_NO_DAEMONIZE=true
+    command: /opt/spark/bin/spark-class org.apache.spark.deploy.worker.Worker --cores 1 --memory 512m spark://spark-master:7077
     depends_on:
-      spark-master:
-        condition: service_healthy
+      - spark-master
+    ports:
+      - "8082:8081"
+    deploy:
+      resources:
+        limits:
+          memory: 768M
+          cpus: '1.0'
+    restart: unless-stopped
 
 volumes:
   kafka_data:
